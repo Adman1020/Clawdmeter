@@ -22,7 +22,7 @@
 // pixel remapping), so landscape costs nothing at runtime.
 #define LCD_WIDTH            320
 #define LCD_HEIGHT           240
-#define LCD_ROTATION         1     // 1 = landscape, USB port on the left
+#define LCD_ROTATION         1     // 1 = landscape, USB socket on the right
 
 // ---- Display SPI (ILI9341, 4-wire) ----
 // The panel's reset is tied to the module reset, not broken out to a GPIO.
@@ -45,17 +45,21 @@
 #define TP_IRQ               36    // PENIRQ: LOW while the panel is pressed
 
 // Resistive-touch calibration. The XPT2046 reports raw 12-bit ADC counts, not
-// pixels, and the usable range stops short of the full 0..4095 because of the
-// panel's edge resistance. These bounds vary between physical units — if taps
-// land offset or the extremes are unreachable, log the raw values in
-// touch.cpp and retune here. RAW_X maps to the display's long axis.
-#define TP_RAW_X_MIN         300
-#define TP_RAW_X_MAX         3800
-#define TP_RAW_Y_MIN         300
-#define TP_RAW_Y_MAX         3800
-#define TP_SWAP_XY           1     // panel axes vs. landscape display axes
+// pixels, and the usable range stops well short of the full 0..4095 because of
+// the panel's edge resistance. The values below were measured on hardware by
+// holding each screen corner in turn and logging the raw pairs; they vary
+// between physical units, so retune here if taps land offset.
+//
+// The panel's axes are transposed relative to the landscape display: raw Y
+// tracks screen X (345 at the left edge, 3647 at the right) and raw X tracks
+// screen Y (550 at the top, 3646 at the bottom). Neither axis is reversed.
+#define TP_RAW_X_MIN         565   // raw X at the top edge    → screen Y = 0
+#define TP_RAW_X_MAX         3625  // raw X at the bottom edge → screen Y = max
+#define TP_RAW_Y_MIN         320   // raw Y at the left edge   → screen X = 0
+#define TP_RAW_Y_MAX         3610  // raw Y at the right edge  → screen X = max
+#define TP_SWAP_XY           1
 #define TP_INVERT_X          0
-#define TP_INVERT_Y          1
+#define TP_INVERT_Y          0
 
 // ---- Buttons ----
 // BOOT is the only usable user button; the other onboard button is EN/reset.

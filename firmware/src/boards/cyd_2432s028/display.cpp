@@ -12,8 +12,10 @@ static Arduino_GFX*     gfx = nullptr;
 
 void display_hal_init(void) {
     bus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI, LCD_MISO);
+    // ips=true — this module renders a photo negative without INVON
+    // (confirmed on hardware), same quirk the LCD-1.54 port's ST7789 has.
     gfx = new Arduino_ILI9341(bus, GFX_NOT_DEFINED /* reset tied to module RST */,
-                              LCD_ROTATION);
+                              LCD_ROTATION, true /* ips */);
 }
 
 void display_hal_begin(void) {
