@@ -6,7 +6,7 @@ selected via PlatformIO's `build_src_filter`. Adding a board means dropping in
 a new folder + a new `[env:...]` block — `main.cpp`, `ui.cpp`, and `splash.cpp`
 never see board-specific code. See [`docs/porting/adding-a-board.md`](docs/porting/adding-a-board.md).
 
-Seven ports today (two SoC families, five panel sizes):
+Eight ports today (three SoC families, six panel sizes):
 
 - `boards/waveshare_amoled_216/` — original Waveshare ESP32-S3-Touch-AMOLED-2.16 (CO5300, 480×480 square, CST9220 touch, IMU rotation). Build env: `waveshare_amoled_216`.
 - `boards/waveshare_amoled_18/` — Waveshare ESP32-S3-Touch-AMOLED-1.8 (368×448 portrait, XCA9554 IO expander). Build env: `waveshare_amoled_18`. **Two panel revisions are auto-detected at boot** (`board_rev()` in `board_init.cpp`, enum in `board_rev.h`): original = SH8601 display + FT3168 touch (0x38); later = CO5300 display + CST816 touch (0x15). One binary drives both.
@@ -16,9 +16,11 @@ Seven ports today (two SoC families, five panel sizes):
 - `boards/waveshare_lcd_154/` — Waveshare ESP32-S3-Touch-LCD-1.54 (ST7789, 240×240 square, CST816T touch @ 0x15). Build env: `waveshare_lcd_154`. **The first non-AMOLED port**: a plain 4-wire SPI TFT, not QSPI, and the panel has no brightness command — backlight is LEDC PWM on `LCD_BL`. **No PMU**: battery is an ADC divider on GPIO1 and `BAT_EN` (GPIO2) is a power-hold line that must be driven HIGH early in `board_init()` or the board browns out on battery. Three buttons (BOOT + GPIO5 + a PWR-role GPIO4); ES8311 chime wired up; QMI8658 populated but unused (fixed orientation, no rotation).
 - `boards/waveshare_lcd_4/` — Waveshare ESP32-S3-Touch-LCD-4 (ST7701 RGB parallel, 480×480 square, GT911 touch). Build env: `waveshare_lcd_4`. **RGB-panel port**: Arduino_ESP32RGBPanel + bounce buffers (tearing fix). IO expander @ 0x24 (TCA9554 / CH32V003) must init before `gfx->begin()` or the panel stays dark; backlight is expander pin 2 (on/off only). No AXP2101 / IMU; KEY/PWR is hardware RST. Single BOOT button (GPIO 0 → Space/PTT).
 
+- `boards/cyd_2432s028/` — ESP32-2432S028, the "Cheap Yellow Display" (ILI9341, 320×240 landscape, XPT2046 **resistive** touch). Build env: `cyd_2432s028`. **First classic-ESP32 port** (ESP32-D0WD-V3, not S3/C6): no native USB, no PSRAM, 4 MB flash. Sparsest board in the tree — no PMU, IMU, battery, IO expander or audio, and a single BOOT button. Display, touch, and BLE advertising verified on hardware.
+
 Plus one non-hardware target: `boards/sim/` — **native desktop simulator** (SDL2 window, 480×480, `platform = native`). Build env: `sim`. See "Desktop simulator" below.
 
-**C6 ports have no PSRAM** — shared code gates on `BOARD_HAS_PSRAM` (absent on C6) to use `MALLOC_CAP_INTERNAL` for LVGL/splash buffers, and the `screenshot` serial command is disabled (`LV_USE_SNAPSHOT=0`), so UI changes on a C6 board must be eyeballed on hardware, not auto-captured.
+**C6 and CYD ports have no PSRAM** — shared code gates on `BOARD_HAS_PSRAM` (absent on both) to use `MALLOC_CAP_INTERNAL` for LVGL/splash buffers, and the `screenshot` serial command is disabled (`LV_USE_SNAPSHOT=0`), so UI changes on those boards must be eyeballed on hardware, not auto-captured. On the CYD this is not merely a panel-size issue: only ~76 KB of internal SRAM survives LVGL and NimBLE there, against the 150 KB a 320×240 frame needs.
 
 The shared code calls a small HAL (`firmware/src/hal/`) that each board implements: display, touch, input, power, IMU. Optional features are guarded by `BoardCaps` (runtime) and `BOARD_HAS_*` (compile-time) rather than `#ifdef BOARD_*`.
 
@@ -72,6 +74,15 @@ ESP32-C6 sibling of the S3 1.8: same 368×448 SH8601 panel + FocalTech touch, di
 - No PMU / IMU. Buttons: GPIO 0 only (BOOT → Space/PTT). KEY/PWR is EN/RST (hardware reset). GPIO 18 is display R3.
 - RGB tearing fix: pass `bounce_buffer_size_px = LCD_WIDTH * 10` to `Arduino_ESP32RGBPanel`. Do not call `rgbpanel->getFrameBuffer()` after `gfx->begin()`.
 
+### CYD (ESP32-2432S028) — `cyd_2432s028`
+**Classic ESP32 (ESP32-D0WD-V3), not an S3/C6.** Dual-core Xtensa, 4 MB flash, no PSRAM. The cheapest and most widely-cloned board the firmware runs on.
+- Display: **ILI9341** 320×240 landscape over plain 4-wire SPI (CS=15, SCLK=14, MOSI=13, MISO=12, DC=2, BL=21). Reset is tied to the module reset, so the driver gets `GFX_NOT_DEFINED`. Needs **`ips=true`** (INVON) or the panel renders a photo negative. Backlight is LEDC PWM (no brightness command). `LCD_ROTATION 1` puts the image upright with the USB socket on the right.
+- Touch: **XPT2046 resistive** on its own pins (CLK=25, CS=33, MOSI=32, MISO=39, IRQ=36), bit-banged in `touch.cpp`. The only non-capacitive panel in the tree: it returns raw 12-bit ADC counts, so readings are median-filtered over 5 samples and mapped through calibration bounds in `board.h`. **Those bounds are per-unit** — measured on this one by holding each corner: raw Y tracks screen X (320..3610), raw X tracks screen Y (565..3625), neither axis reversed.
+- No PMU, IMU, battery, IO expander or audio. Single button: GPIO 0 (BOOT → Space/PTT); the other onboard button is EN/reset, so there is no PWR-role button and no hold-to-pair.
+- **No native USB.** Serial is UART0 through an onboard CP2102, so flash and monitor on `/dev/cu.usbserial-*` (macOS) or `/dev/ttyUSB0` (Linux), *not* the usbmodem path. `upload_speed` must be **460800** — 921600 drops the bridge mid-flash ("chip stopped responding").
+- Flash: 4 MB, so the env uses `huge_app.csv` (~3 MB app; the image is ~1.7 MB). The default 4 MB layout's ~1.3 MB app partition is too small.
+- Some 2432S028 batches ship an ST7789 panel or a capacitive CST820 instead. This port targets the ILI9341 + XPT2046 variant; check the display driver first if a different unit stays dark.
+
 ## Architecture
 
 ```text
@@ -91,6 +102,7 @@ firmware/src/
     waveshare_amoled_206/   — CO5300 + FT3168 + AXP PKEY, no IO expander, 32 MB, no rotation
     waveshare_lcd_154/      — ST7789 SPI TFT + CST816T + ADC battery (no PMU), PWM backlight
     waveshare_lcd_4/         — ST7701 RGB parallel + GT911 + expander backlight, no PMU/IMU
+    cyd_2432s028/           — classic ESP32: ILI9341 SPI + XPT2046 resistive touch, no PSRAM
     sim/                    — native desktop simulator: SDL2 + Arduino shims + scenario playback
     template/               — copy this to bootstrap a new port
   main.cpp                  — setup() + loop(): HAL calls only, zero #ifdef BOARD_*
@@ -121,6 +133,8 @@ pio run -d firmware -e waveshare_amoled_18_c6                                   
 pio run -d firmware -e waveshare_amoled_206                                     # build 2.06 (S3, watch)
 pio run -d firmware -e waveshare_lcd_154                                        # build 1.54 (S3, SPI TFT)
 pio run -d firmware -e waveshare_lcd_4                                           # build LCD-4 (S3, RGB TFT)
+pio run -d firmware -e cyd_2432s028                                              # build CYD (classic ESP32, ILI9341)
+pio run -d firmware -e cyd_2432s028 -t upload --upload-port /dev/cu.usbserial-210 # flash CYD (UART bridge, not usbmodem)
 pio run -d firmware -e waveshare_amoled_18 -t upload --upload-port /dev/cu.usbmodem101   # flash 1.8 on macOS
 pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port /dev/ttyACM0         # flash 2.16 on Linux
 # C6 boards: same native USB-JTAG flashing; flag a chip mismatch ("This chip is ESP32-C6,

@@ -10,15 +10,20 @@ gap in the HAL — open an issue.
 
 At minimum:
 
-- An **ESP32-S3** (other ESP32 family members may work; this is what the
-  upstream firmware is tested on). OPI PSRAM is **required** — partial
-  flush buffers and the splash canvas are allocated from PSRAM.
+- An **ESP32**. The S3 is what most ports use, but the C6 and the classic
+  ESP32 (ESP32-D0WD-V3, on the CYD port) both work. PSRAM is **optional**:
+  when the env omits `-DBOARD_HAS_PSRAM`, shared code allocates the flush
+  buffers from internal SRAM, shrinks the LVGL strip, and swaps the animated
+  corner mascot for a static one. Expect to lose the `screenshot` command
+  there — a full-frame buffer rarely fits in internal SRAM.
 - A panel with a driver supported by
   [GFX Library for Arduino](https://github.com/moononournation/Arduino_GFX).
   Reference ports cover QSPI AMOLED (CO5300, SH8601), 4-wire SPI TFT
-  (ST7789 on LCD-1.54), and RGB parallel (ST7701 on LCD-4).
-- A **touch controller** over I2C. The HAL just needs init + read; you
-  can use any driver you can compile.
+  (ST7789 on LCD-1.54, ILI9341 on the CYD), and RGB parallel (ST7701 on
+  LCD-4).
+- A **touch controller**. Most ports read a capacitive controller over I2C;
+  the CYD port reads an XPT2046 resistive controller over bit-banged SPI.
+  The HAL just needs init + read, so any driver you can compile will do.
 - A **primary button** (typically the BOOT/GPIO 0 push button).
 
 Optional:
@@ -94,6 +99,19 @@ Optional:
 
 ## Common pitfalls
 
+- **Colours look like a photo negative.** The panel needs INVON — pass
+  `ips = true` to the Arduino_GFX driver constructor. Both TFT ports hit
+  this (ST7789 on LCD-1.54, ILI9341 on the CYD).
+- **Touch coordinates need calibrating, not just remapping.** Resistive
+  controllers (XPT2046) report raw ADC counts rather than pixels, and the
+  usable range stops short of 0..4095. Log the raw pairs while holding each
+  screen corner, then set the bounds in `board.h` — they differ per physical
+  unit. See `boards/cyd_2432s028/touch.cpp`.
+- **Classic-ESP32 targets have no native USB.** Drop
+  `ARDUINO_USB_CDC_ON_BOOT`, flash over `/dev/cu.usbserial-*` or
+  `/dev/ttyUSB0`, and drop `upload_speed` to 460800 if the bridge stops
+  responding mid-flash. Watch the flash budget too: a 4 MB module needs
+  `board_build.partitions = huge_app.csv` to fit the ~1.7 MB image.
 - **Display stays black, no panic.** Usually one of: OPI PSRAM not enabled
   in platformio.ini (check `board_build.arduino.memory_type = qio_opi`);
   IO expander not released before `gfx->begin()` (run `io_expander_init()`
