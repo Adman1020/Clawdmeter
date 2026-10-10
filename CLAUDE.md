@@ -102,6 +102,10 @@ firmware/src/
   logo.h                    — 80×80 RGB565 logo
   font_*.c                  — pre-compiled LVGL 9 bitmap fonts (Tiempos 56/34, Styrene 48/28/24/20/16/14/12, Mono 32/18)
   splash_animations.h       — generated, do not hand-edit
+  link/                     — transport interface (link.h). link_ble.cpp adapts ble.cpp;
+    wifi/                   — standalone mode: wifi_poller (FreeRTOS, PSRAM TLS), usage_payload
+                              (pure, host-tested in test/test_usage_payload), provisioning
+                              (NVS + serial), captive_portal, gts_roots.h (pinned CA)
 docs/porting/               — adding-a-board.md, hal-contract.md, capability-flags.md
 ```
 
@@ -121,6 +125,7 @@ pio run -d firmware -e waveshare_amoled_18_c6                                   
 pio run -d firmware -e waveshare_amoled_206                                     # build 2.06 (S3, watch)
 pio run -d firmware -e waveshare_lcd_154                                        # build 1.54 (S3, SPI TFT)
 pio run -d firmware -e waveshare_lcd_4                                           # build LCD-4 (S3, RGB TFT)
+pio run -d firmware -e waveshare_amoled_216_wifi                                # build 2.16 standalone WiFi (no daemon; see README)
 pio run -d firmware -e waveshare_amoled_18 -t upload --upload-port /dev/cu.usbmodem101   # flash 1.8 on macOS
 pio run -d firmware -e waveshare_amoled_216 -t upload --upload-port /dev/ttyACM0         # flash 2.16 on Linux
 # C6 boards: same native USB-JTAG flashing; flag a chip mismatch ("This chip is ESP32-C6,
@@ -180,6 +185,8 @@ The boot screen is `SCREEN_SPLASH` and only advances on a physical button press,
 10. **No `#ifdef BOARD_*` in shared code.** The whole point of the refactor — if you're about to add one, you probably want a `BoardCaps` field or a per-board file instead. See `docs/porting/capability-flags.md`.
 11. **LCD-4 RGB bounce buffers.** `Arduino_RGB_Display` DMA-scans PSRAM. Pass `bounce_buffer_size_px = LCD_WIDTH * 10` so ESP-IDF allocates SRAM bounce buffers. Do not call `rgbpanel->getFrameBuffer()` after `gfx->begin()` — it constructs a second RGB panel and crashes.
 12. **LCD-4 has only one user button (GPIO 0 / BOOT).** GPIO 18 is display R3. KEY/PWR is EN/RST (hardware reset). Hold-to-pair and PWR-short animation/brightness cycling are unavailable; tap the panel to toggle splash ↔ usage.
+13. **WiFi env is PSRAM-only, and its poller stack must stay in internal SRAM.** TLS record buffers (2×16 KB) go to PSRAM via `mbedtls_platform_set_calloc_free`; NimBLE HID + HTTPS do not fit in internal SRAM otherwise. The poller *task stack* must NOT be in PSRAM — WiFi init / NVS writes run flash ops with the cache disabled and the task silently stalled on hardware. Never add `link/wifi/` to a C6 env. `LINK_WIFI` is the only build flag allowed in shared code, and only inside `ble.cpp`.
+14. **Never use the OAuth refresh token on-device** (upstream issue #110 — it is rate-limited and can log out Claude Code / Desktop). The WiFi link uses `claude setup-token` and only calls `/v1/messages`; `/api/oauth/usage` returns 403 for that token's scope. Shared code talks to the transport only through `link/link.h` (`link_*`), never `ble_has_data()` etc.
 
 ## Icons
 
@@ -236,6 +243,7 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 
 ## Recent session highlights
 
+- **Standalone WiFi link (2026-10-10).** New `link/` transport abstraction (`link.h`; `link_ble.cpp` adapts the GATT data service, `link/wifi/` polls the Anthropic API directly) and env `waveshare_amoled_216_wifi`. Captive portal + serial provisioning, NVS storage, pinned GTS Root R4 (K2 expires 2028-01-28). Spec/plan under `docs/superpowers/`. Verified on the 2.16: boot, hotspot, hint screen; end-to-end poll needs the owner's credentials.
 - **AMOLED-1.8 chime verified on hardware + EXIO2 touch-kill fix (2026-07-13).** The 1.8's `amp_enable` hook drove both GPIO 46 and XCA9554 EXIO2 ("the unused one is harmless") — but pulling EXIO2 low takes the FT3168 off the I2C bus (chip stops ACKing; IDF reports it as `ESP_ERR_INVALID_STATE`, which reads like a driver wedge and cost a long I2S red-herring chase). Amp enable is GPIO 46 only; EXIO2 must stay HIGH. Chime, touch, buttons, and BLE bond persistence all verified on a real 1.8.
 - **Device-abstraction refactor (2026-05-18).** All board-conditional code moved out of shared files into `boards/<name>/` and behind a HAL in `hal/`. ~30 `#ifdef BOARD_*` blocks went to zero. UI is responsive via `compute_layout()` driven by `board_caps()`. New ports add a folder + a PlatformIO env — no shared file edits.
 - Added second board port: Waveshare AMOLED-1.8 (368×448 portrait, SH8601, FT3168, XCA9554 IO expander).

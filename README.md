@@ -191,6 +191,29 @@ reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Clawdmeter /f
 | `Connection failed`                    | Toggle Windows Bluetooth off/on in Settings.             |
 | `Warning: running under Linux/WSL`     | Run from a native PowerShell window, not a WSL shell.    |
 
+## Standalone WiFi mode (no laptop)
+
+The AMOLED-2.16 can poll the Anthropic API itself over WiFi, so it works with
+no daemon and no Bluetooth data link (the BLE keyboard keys still work).
+
+1. On any machine with Claude Code, run `claude setup-token` and copy the
+   `sk-ant-oat01-…` value. This is a long-lived token with inference scope
+   only; it is stored on the device and never leaves it.
+2. Flash the WiFi build:
+   `pio run -d firmware -e waveshare_amoled_216_wifi -t upload --upload-port /dev/cu.usbmodem101`
+3. On first boot the device opens a hotspot named **Clawdmeter**. Join it from
+   your phone, open the sign-in sheet (or browse to `192.168.4.1`), enter your
+   WiFi details, the token, and your timezone. The device reboots and shows
+   usage within about a minute.
+
+To move networks or change the token, hold the power button for ~3 s and
+release: the hotspot reopens. Serial alternative at 115200 baud:
+`ssid <name>`, `pass <password>`, `token <sk-ant-…>`, `tz <minutes east of UTC>`,
+`status`, `wifi-reset`. `ble-reset` clears HID pairings.
+
+Each poll costs one Haiku output token. The device pins the GTS Root R4
+certificate; the cross-signed copy expires 2028-01-28 and will need a reflash.
+
 ## How it works
 
 <img src="assets/readme/magnifier.gif" width="150" align="right" alt="">
