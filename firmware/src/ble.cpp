@@ -6,11 +6,15 @@
 
 #define DEVICE_NAME "Clawdmeter"
 
+// LINK_WIFI: the device polls the API itself (link/wifi), so the GATT data
+// channel is compiled out; HID keyboard + bonding stay.
+#ifndef LINK_WIFI
 // Custom GATT UUIDs for data channel
 #define SERVICE_UUID        "4c41555a-4465-7669-6365-000000000001"
 #define RX_CHAR_UUID        "4c41555a-4465-7669-6365-000000000002"  // host writes here
 #define TX_CHAR_UUID        "4c41555a-4465-7669-6365-000000000003"  // device ack/nack notifies
 #define REQ_CHAR_UUID       "4c41555a-4465-7669-6365-000000000004"  // device-initiated refresh request
+#endif
 
 #define BLE_BUF_SIZE 512
 
@@ -58,9 +62,11 @@ static const uint8_t HID_REPORT_MAP[] = {
 static NimBLEServer* server = nullptr;
 static NimBLEHIDDevice* hid_dev = nullptr;
 static NimBLECharacteristic* input_kbd = nullptr;
+#ifndef LINK_WIFI
 static NimBLECharacteristic* tx_char = nullptr;
 static NimBLECharacteristic* rx_char = nullptr;
 static NimBLECharacteristic* req_char = nullptr;
+#endif
 
 static ble_state_t state = BLE_STATE_INIT;
 static bool need_advertise = false;
@@ -72,9 +78,11 @@ static const uint16_t DESIRED_TIMEOUT   = 600;   // ×10ms = 6s, matches PPCP
 static volatile uint16_t param_fix_handle = CONN_HANDLE_NONE;  // pending retry
 static volatile uint32_t param_fix_at_ms  = 0;                 // when to send it
 static volatile uint16_t param_fix_spent  = CONN_HANDLE_NONE;  // one per connection
+#ifndef LINK_WIFI
 static char rx_buf[BLE_BUF_SIZE];
 static volatile bool data_ready = false;
 static volatile bool has_received_data = false;
+#endif
 static char mac_str[18];
 
 // --- Single-owner lock -----------------------------------------------------
@@ -158,12 +166,14 @@ static void start_advertising() {
     adv->setAppearance(HID_KEYBOARD);
     adv->addServiceUUID(NimBLEUUID((uint16_t)0x1812));  // BLE HID Service
     adv->setName(DEVICE_NAME);
+#ifndef LINK_WIFI
     // Scan response carries the 128-bit custom data-service UUID for active
     // scanners (the host daemon scans actively).
     NimBLEAdvertisementData scanResp;
     scanResp.setCompleteServices(NimBLEUUID(SERVICE_UUID));
     adv->setScanResponseData(scanResp);
     adv->enableScanResponse(true);
+#endif
     bool ok = adv->start();
     // Only reflect ADVERTISING in the UI state when no client is connected.
     // With MAX_CONNECTIONS=2, onConnect re-advertises to fill the second slot;
@@ -259,6 +269,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 
 };
 
+#ifndef LINK_WIFI
 class RxCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* chr, NimBLEConnInfo& info) override {
         // Only accept usage data over a bonded+encrypted link, and only from the
@@ -297,6 +308,7 @@ class ReqCallbacks : public NimBLECharacteristicCallbacks {
         }
     }
 };
+#endif  // LINK_WIFI
 
 void ble_init(void) {
     NimBLEDevice::init(DEVICE_NAME);
@@ -336,6 +348,7 @@ void ble_init(void) {
     hid_dev->setBatteryLevel(100);
     input_kbd = hid_dev->getInputReport(1);  // report ID 1
 
+#ifndef LINK_WIFI
     // --- Custom data service ---
     NimBLEService* svc = server->createService(SERVICE_UUID);
 
@@ -359,6 +372,7 @@ void ble_init(void) {
     req_char->setCallbacks(&reqCb);
 
     svc->start();
+#endif
     server->start();
     start_advertising();
 
@@ -409,6 +423,13 @@ bool ble_has_bonds(void) {
     return NimBLEDevice::getNumBonds() > 0;
 }
 
+#ifdef LINK_WIFI
+bool ble_has_data(void) { return false; }
+const char* ble_get_data(void) { return ""; }
+void ble_send_ack(void) {}
+void ble_send_nack(void) {}
+void ble_request_refresh(void) {}
+#else
 bool ble_has_data(void) {
     return data_ready;
 }
@@ -432,12 +453,15 @@ void ble_send_nack(void) {
     }
 }
 
+#endif  // LINK_WIFI
+
 void ble_set_battery_level(int pct) {
     if (!hid_dev || pct < 0) return;
     if (pct > 100) pct = 100;
     hid_dev->setBatteryLevel((uint8_t)pct, state == BLE_STATE_CONNECTED);
 }
 
+#ifndef LINK_WIFI
 void ble_request_refresh(void) {
     if (state == BLE_STATE_CONNECTED && req_char) {
         uint8_t v = 0x01;
@@ -446,6 +470,7 @@ void ble_request_refresh(void) {
         Serial.println("BLE: refresh requested");
     }
 }
+#endif  // LINK_WIFI
 
 void ble_keyboard_press(uint8_t key, uint8_t modifier) {
     if (state != BLE_STATE_CONNECTED || !input_kbd) return;
