@@ -19,6 +19,7 @@ LinkStatus link_status(void) {
     s.line2  = "hold the power button";
     s.line3  = "for 3 seconds, then release";
     s.detail = "";
+    s.gen    = (uint32_t)s.state;   // strings are constant; only the state can change
     return s;
 }
 

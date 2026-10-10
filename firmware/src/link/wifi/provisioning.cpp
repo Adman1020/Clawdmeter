@@ -15,6 +15,7 @@ void prov_load(WifiConfig* out) {
     p.getString("token", out->token, sizeof out->token);
     out->tz_minutes = p.getInt("tz", 0);
     out->hour_fmt   = p.getInt("tf", 0);
+    out->ever_ok    = p.getBool("ok", false);
     p.end();
 }
 
@@ -26,6 +27,7 @@ void prov_save(const WifiConfig& c) {
     p.putString("token", c.token);
     p.putInt("tz", c.tz_minutes);
     p.putInt("tf", c.hour_fmt);
+    p.putBool("ok", c.ever_ok);
     p.end();
 }
 
@@ -58,8 +60,8 @@ static void print_status(const WifiConfig& c) {
 }
 
 bool prov_handle_serial(const char* line, WifiConfig* cfg) {
-    if (strncmp(line, "ssid ", 5) == 0)    { copy_arg(cfg->ssid,  sizeof cfg->ssid,  line + 5); prov_save(*cfg); Serial.println("ssid saved — reboot to apply"); return true; }
-    if (strncmp(line, "pass ", 5) == 0)    { copy_arg(cfg->pass,  sizeof cfg->pass,  line + 5); prov_save(*cfg); Serial.println("pass saved — reboot to apply"); return true; }
+    if (strncmp(line, "ssid ", 5) == 0)    { copy_arg(cfg->ssid,  sizeof cfg->ssid,  line + 5); cfg->ever_ok = false; prov_save(*cfg); Serial.println("ssid saved — reboot to apply"); return true; }
+    if (strncmp(line, "pass ", 5) == 0)    { copy_arg(cfg->pass,  sizeof cfg->pass,  line + 5); cfg->ever_ok = false; prov_save(*cfg); Serial.println("pass saved — reboot to apply"); return true; }
     if (strncmp(line, "token ", 6) == 0)   { copy_arg(cfg->token, sizeof cfg->token, line + 6); prov_save(*cfg); Serial.println("token saved — reboot to apply"); return true; }
     if (strncmp(line, "tz ", 3) == 0)      { cfg->tz_minutes = atoi(line + 3); prov_save(*cfg); Serial.printf("tz=%d saved\n", cfg->tz_minutes); return true; }
     if (strncmp(line, "hourfmt ", 8) == 0) { int v = atoi(line + 8); cfg->hour_fmt = (v == 12 || v == 24) ? v : 0; prov_save(*cfg); Serial.printf("hourfmt=%d saved\n", cfg->hour_fmt); return true; }

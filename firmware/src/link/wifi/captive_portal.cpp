@@ -20,17 +20,37 @@ input,select{width:100%;box-sizing:border-box;padding:12px;border-radius:8px;bor
 button{margin-top:22px;width:100%;padding:14px;border:0;border-radius:8px;background:#d97757;color:#141413;font-size:17px;font-weight:600}
 small{color:#8a877f}code{color:#faf9f5}</style></head><body><h1>Clawdmeter</h1><p>Standalone WiFi setup</p><form method="POST" action="/save">)HTML";
 
-static const char PAGE_TAIL[] PROGMEM = R"HTML(<label>Timezone offset</label><select name="tz">
-<option value="-720">UTC-12</option><option value="-600">UTC-10 Hawaii</option><option value="-540">UTC-9 Alaska</option>
-<option value="-480">UTC-8 Pacific</option><option value="-420">UTC-7 Mountain</option><option value="-360">UTC-6 Central</option>
-<option value="-300">UTC-5 Eastern</option><option value="-240">UTC-4 Atlantic</option><option value="-180">UTC-3</option>
-<option value="0" selected>UTC+0 London/Dublin</option><option value="60">UTC+1 Central Europe</option><option value="120">UTC+2</option>
-<option value="180">UTC+3</option><option value="240">UTC+4</option><option value="330">UTC+5:30 India</option><option value="480">UTC+8 China/Singapore</option>
-<option value="540">UTC+9 Japan</option><option value="600">UTC+10 Sydney</option><option value="720">UTC+12 NZ</option></select>
-<label>Clock on usage screen</label><select name="tf"><option value="0">Off</option><option value="24" selected>24-hour</option><option value="12">12-hour</option></select>
-<button type="submit">Save &amp; connect</button>
-<p style="margin-top:18px"><small>Token: run <code>claude setup-token</code> on a machine with Claude Code and paste the result (starts with sk-ant-oat01-). It is stored on this device only.</small></p>
+static const char PAGE_TAIL[] PROGMEM = R"HTML(<button type="submit">Save &amp; connect</button>
+<p style="margin-top:18px"><small>Token: run <code>claude setup-token</code> on a machine with Claude Code and paste the result (starts with sk-ant-oat01-). It is stored on this device (plain flash) and sent only to api.anthropic.com.</small></p>
 </form></body></html>)HTML";
+
+struct TzOpt { int mins; const char* label; };
+static const TzOpt TZ_OPTS[] = {
+    {-720,"UTC-12"},{-600,"UTC-10 Hawaii"},{-540,"UTC-9 Alaska"},{-480,"UTC-8 Pacific"},
+    {-420,"UTC-7 Mountain"},{-360,"UTC-6 Central"},{-300,"UTC-5 Eastern"},{-240,"UTC-4 Atlantic"},
+    {-180,"UTC-3"},{-120,"UTC-2"},{-60,"UTC-1"},{0,"UTC+0 London/Dublin"},{60,"UTC+1 Central Europe"},
+    {120,"UTC+2"},{180,"UTC+3"},{240,"UTC+4"},{300,"UTC+5"},{330,"UTC+5:30 India"},{345,"UTC+5:45 Nepal"},
+    {360,"UTC+6"},{420,"UTC+7"},{480,"UTC+8 China/Singapore"},{540,"UTC+9 Japan"},{570,"UTC+9:30 Adelaide"},
+    {600,"UTC+10 Sydney"},{660,"UTC+11"},{720,"UTC+12 NZ"},{780,"UTC+13"},
+};
+
+// <select>s pre-select the stored values so re-provisioning for a new network
+// does not silently reset the clock settings.
+static void append_selects(String& page, int tz, int tf) {
+    page += "<label>Timezone offset</label><select name=\"tz\">";
+    bool matched = false;
+    for (const TzOpt& o : TZ_OPTS) if (o.mins == tz) matched = true;
+    for (const TzOpt& o : TZ_OPTS) {
+        page += "<option value=\""; page += o.mins; page += "\"";
+        if (o.mins == tz || (!matched && o.mins == 0)) page += " selected";
+        page += ">"; page += o.label; page += "</option>";
+    }
+    page += "</select><label>Clock on usage screen</label><select name=\"tf\">";
+    page += tf == 0  ? "<option value=\"0\" selected>Off</option>"      : "<option value=\"0\">Off</option>";
+    page += tf == 24 ? "<option value=\"24\" selected>24-hour</option>" : "<option value=\"24\">24-hour</option>";
+    page += tf == 12 ? "<option value=\"12\" selected>12-hour</option>" : "<option value=\"12\">12-hour</option>";
+    page += "</select>";
+}
 
 static void html_escape(const char* in, String& out) {
     for (; *in; ++in) {
@@ -43,29 +63,41 @@ static void html_escape(const char* in, String& out) {
 }
 
 static void handle_root() {
-    String page; page.reserve(3200);
+    String page; page.reserve(4096);
     page += FPSTR(PAGE_HEAD);
     page += "<label>WiFi network</label><input name=\"ssid\" required maxlength=\"32\" value=\"";
     html_escape(s_cfg.ssid, page);
-    page += "\"><label>WiFi password</label><input name=\"pass\" type=\"password\" maxlength=\"64\" value=\"";
-    html_escape(s_cfg.pass, page);
+    // Never echo the stored password: this is an open AP. Empty = keep current.
+    page += "\"><label>WiFi password</label><input name=\"pass\" type=\"password\" maxlength=\"64\" placeholder=\"";
+    page += s_cfg.pass[0] ? "(keep current password)" : "";
     page += "\"><label>Anthropic token</label><input name=\"token\" maxlength=\"255\" placeholder=\"";
     page += s_cfg.token[0] ? "(keep current token)" : "sk-ant-oat01-…";
     page += "\">";
+    append_selects(page, s_cfg.tz_minutes, s_cfg.hour_fmt);
     page += FPSTR(PAGE_TAIL);
     s_http->send(200, "text/html", page);
 }
 
+static void copy_field(char* dst, size_t cap, const String& v) {
+    strncpy(dst, v.c_str(), cap - 1);
+    dst[cap - 1] = '\0';
+}
+
 static void handle_save() {
-    WifiConfig c = s_cfg;
     // WebServer::arg() URL-decodes form bodies, so &, +, % and quotes in a
     // password arrive verbatim.
-    strncpy(c.ssid, s_http->arg("ssid").c_str(), sizeof c.ssid - 1);
-    strncpy(c.pass, s_http->arg("pass").c_str(), sizeof c.pass - 1);
-    String tok = s_http->arg("token"); tok.trim();
-    if (tok.length()) strncpy(c.token, tok.c_str(), sizeof c.token - 1);   // empty = keep existing
+    String ssid = s_http->arg("ssid"); ssid.trim();
+    if (!ssid.length()) { s_http->send(400, "text/plain", "WiFi network name is required"); return; }
+    WifiConfig c = s_cfg;
+    String pass = s_http->arg("pass");
+    String tok  = s_http->arg("token"); tok.trim();
+    bool creds_changed = (ssid != s_cfg.ssid) || (pass.length() > 0);
+    copy_field(c.ssid, sizeof c.ssid, ssid);
+    if (pass.length()) copy_field(c.pass, sizeof c.pass, pass);     // empty = keep existing
+    if (tok.length())  copy_field(c.token, sizeof c.token, tok);    // empty = keep existing
     c.tz_minutes = s_http->arg("tz").toInt();
     int tf = s_http->arg("tf").toInt(); c.hour_fmt = (tf == 12 || tf == 24) ? tf : 0;
+    if (creds_changed) c.ever_ok = false;   // new credentials must prove themselves again
     prov_save(c);
     s_http->send(200, "text/html",
         "<!doctype html><body style=\"font-family:system-ui;background:#141413;color:#faf9f5;padding:24px\">"
@@ -102,7 +134,6 @@ void portal_start(const WifiConfig& current) {
     s_http->onNotFound(handle_redirect);
     s_http->begin();
     s_active = true;
-    Serial.println("portal: hotspot \"Clawdmeter\" up at 192.168.4.1");
 }
 
 void portal_tick(void) {

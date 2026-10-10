@@ -126,9 +126,10 @@ static bool parse_json(const char* json, UsageData* out) {
 }
 
 // ---- Serial command buffer ----
-#define CMD_BUF_SIZE 64
+#define CMD_BUF_SIZE 320   // must hold "token <sk-ant-oat01-…>" (~115 chars) with headroom
 static char cmd_buf[CMD_BUF_SIZE];
 static int cmd_pos = 0;
+static bool cmd_overflow = false;
 
 static void send_screenshot() {
 #ifndef BOARD_HAS_PSRAM
@@ -173,14 +174,20 @@ static void check_serial_cmd() {
         char c = Serial.read();
         if (c == '\n' || c == '\r') {
             cmd_buf[cmd_pos] = '\0';
-            if (strcmp(cmd_buf, "screenshot") == 0) send_screenshot();
+            if (cmd_overflow) {
+                Serial.println("serial: line too long, ignored");
+            } else if (strcmp(cmd_buf, "screenshot") == 0) send_screenshot();
             else if (strcmp(cmd_buf, "buzz") == 0)  sound_hal_play_reset();
             else if (strcmp(cmd_buf, "ble-reset") == 0) ble_clear_bonds();
             else if (!link_serial_cmd(cmd_buf) && cmd_buf[0])
-                Serial.printf("unknown command: %s\n", cmd_buf);
+                // Never echo the line: a mistyped `token …` would print the secret.
+                Serial.println("unknown command (screenshot, buzz, ble-reset; WiFi builds: ssid, pass, token, tz, hourfmt, status, wifi-reset)");
             cmd_pos = 0;
+            cmd_overflow = false;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_pos++] = c;
+        } else {
+            cmd_overflow = true;   // drop the rest of the line and reject it at EOL
         }
     }
 }
@@ -242,8 +249,8 @@ void setup() {
         board_caps().name, W, H);
 }
 
-static link_state_t last_link_state   = LINK_INIT;
-static uint32_t     last_link_poll_ms = 0;
+static uint32_t last_link_gen     = 0xFFFFFFFFu;   // force the first render
+static uint32_t last_link_poll_ms = 0;
 
 // Hold-to-pair gesture: hold the PWR button ~3s, then RELEASE → clear all BLE
 // bonds and re-advertise. Clearing on *release* (not while held) is deliberate:
@@ -359,15 +366,14 @@ void loop() {
         pair_tick();
     }
 
-    // Transport status → UI. Throttled; the detail string can change without
-    // the state changing (WiFi errors), so compare the (static) pointer too.
+    // Transport status → UI. Throttled; the transport bumps `gen` whenever
+    // any status field may have changed (WiFi errors change text without
+    // changing state), so that is the only thing compared here.
     if (millis() - last_link_poll_ms >= 250) {
         last_link_poll_ms = millis();
         LinkStatus ls = link_status();
-        static const char* last_detail = nullptr;
-        if (ls.state != last_link_state || ls.detail != last_detail) {
-            last_link_state = ls.state;
-            last_detail = ls.detail;
+        if (ls.gen != last_link_gen) {
+            last_link_gen = ls.gen;
             ui_update_link_status(ls);
         }
     }

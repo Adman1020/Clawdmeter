@@ -198,7 +198,9 @@ no daemon and no Bluetooth data link (the BLE keyboard keys still work).
 
 1. On any machine with Claude Code, run `claude setup-token` and copy the
    `sk-ant-oat01-…` value. This is a long-lived token with inference scope
-   only; it is stored on the device and never leaves it.
+   only. It is stored in the device's flash (plain NVS, not encrypted) and is
+   sent only to `api.anthropic.com`. Enter it on the setup page over your own
+   hotspot connection; the hotspot is open, so do this somewhere you trust.
 2. Flash the WiFi build:
    `pio run -d firmware -e waveshare_amoled_216_wifi -t upload --upload-port /dev/cu.usbmodem101`
 3. On first boot the device opens a hotspot named **Clawdmeter**. Join it from
@@ -209,10 +211,14 @@ no daemon and no Bluetooth data link (the BLE keyboard keys still work).
 To move networks or change the token, hold the power button for ~3 s and
 release: the hotspot reopens. Serial alternative at 115200 baud:
 `ssid <name>`, `pass <password>`, `token <sk-ant-…>`, `tz <minutes east of UTC>`,
-`status`, `wifi-reset`. `ble-reset` clears HID pairings.
+`hourfmt <0|12|24>`, `status`, `wifi-reset`. `ble-reset` clears HID pairings.
+An unattended hotspot closes itself after 5 minutes and the device goes back
+to its saved network (so a power cut never leaves it stuck as an open AP).
 
 Each poll costs one Haiku output token. The device pins the GTS Root R4
-certificate; the cross-signed copy expires 2028-01-28 and will need a reflash.
+certificate (both the self-signed and GlobalSign-cross-signed copies, which
+share a key, so there is no 2028 reflash deadline). If Anthropic moves to a
+different CA the pinned root in `gts_roots.h` needs updating.
 
 ## How it works
 

@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 
 // Transport abstraction between main/ui and the usage-data source.
 // Two implementations exist, selected per PlatformIO env via build_src_filter:
@@ -18,6 +19,7 @@ enum link_state_t {
 // static storage owned by the transport and remain valid until the next
 // link_status() call.
 struct LinkStatus {
+    uint32_t     gen;     // bumps whenever any field below may have changed; UI re-renders on change
     link_state_t state;
     const char*  line1;   // hint title shown when not connected, e.g. "To pair"
     const char*  line2;   // hint body line 1

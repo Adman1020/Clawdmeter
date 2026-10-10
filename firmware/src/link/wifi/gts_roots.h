@@ -3,8 +3,9 @@
 // Google Trust Services root R4, two key pairs in circulation:
 //   K1 — self-signed, in OS trust stores, expires 2036-06-22
 //   K2 — cross-signed by GlobalSign Root CA, sent in api.anthropic.com's chain,
-//        expires 2028-01-28  ← re-extract and reflash before then
-// mbedTLS tries each anchor, so whichever signed the GTS WE1 intermediate works.
+//        expires 2028-01-28. K1 and K2 carry the SAME public key, so K1 keeps
+//        validating the chain after K2 expires — no reflash deadline. The real
+//        risk is Anthropic moving to a different CA; then re-pin.
 // Extracted 2026-10-10: K1 from curl.se/ca/cacert.pem, K2 from the live chain
 // (openssl s_client -connect api.anthropic.com:443 -showcerts).
 static const char GTS_ROOT_R4_CA[] PROGMEM = R"PEM(
@@ -41,27 +42,4 @@ kGN+hr/W5GvT1tMBjgWKZ1i4//emhA1JG1BbPzoLJQvyEotc03lXjTaCzv8mEbep
 8RqZ7a2CPsgRbuvTPBwcOMBBmuFeU88+FSBX6+7iP0il8b4Z0QFqIwwMHfs/L6K1
 vepuoxtGzi4CZ68zJpiq1UvSqTbFJjtbD4seiMHl
 -----END CERTIFICATE-----
----
-Server certificate
-subject=CN=api.anthropic.com
-issuer=C=US, O=Google Trust Services, CN=WE1
----
-No client certificate CA names sent
-Peer signing digest: SHA256
-Peer signature type: ecdsa_secp256r1_sha256
-Negotiated TLS1.3 group: X25519MLKEM768
----
-SSL handshake has read 3869 bytes and written 1628 bytes
-Verification: OK
----
-New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
-Protocol: TLSv1.3
-Server public key is 256 bit
-This TLS version forbids renegotiation.
-Compression: NONE
-Expansion: NONE
-No ALPN negotiated
-Early data was not sent
-Verify return code: 0 (ok)
----
 )PEM";

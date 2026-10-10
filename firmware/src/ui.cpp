@@ -237,7 +237,7 @@ static const uint32_t DATA_FRESH_MS = 90000;  // usage counts as "live" within t
 static lv_image_dsc_t logo_dsc;
 static screen_t current_screen = SCREEN_USAGE;
 static bool       s_link_connected = false;   // cached transport state
-static LinkStatus s_link = { LINK_INIT, "", "", "", "" };
+static LinkStatus s_link = { 0, LINK_INIT, "", "", "", "" };
 static lv_obj_t*  pair_l1 = nullptr;
 static lv_obj_t*  pair_l2 = nullptr;
 static lv_obj_t*  pair_l3 = nullptr;

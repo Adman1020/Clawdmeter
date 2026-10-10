@@ -9,6 +9,7 @@ struct WifiConfig {
     char token[256];
     int  tz_minutes;   // local offset east of UTC; default 0
     int  hour_fmt;     // 0 = clock off, 12 or 24
+    bool ever_ok;      // these WiFi credentials have connected at least once
 };
 
 void prov_load(WifiConfig* out);

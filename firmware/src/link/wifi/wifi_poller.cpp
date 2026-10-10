@@ -23,8 +23,12 @@
 static const char* API_URL   = "https://api.anthropic.com/v1/messages";
 static const char* API_BODY  = "{\"model\":\"claude-haiku-4-5-20251001\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}";
 static const uint32_t POLL_MS_MIN = 60000, POLL_MS_MAX = 300000;
+static const uint32_t CONNECT_TIMEOUT_MS = 20000;
+static const uint32_t RECONNECT_MS_MIN = 5000, RECONNECT_MS_MAX = 60000;
 static const int      CONNECT_FAILS_TO_PORTAL = 3;
-static const time_t   SANE_EPOCH = 1704067200;   // 2024-01-01
+static const uint32_t PORTAL_IDLE_EXIT_MS = 5 * 60 * 1000;   // unattended hotspot closes after this
+static const time_t   SANE_EPOCH = 1704067200;               // 2024-01-01
+static const uint32_t TASK_STACK_BYTES = 12288;
 
 // Order matches RateLimitHeaders field order in usage_payload.h.
 static const char* HDRS[] = {
@@ -39,15 +43,22 @@ static const char* HDRS[] = {
 };
 static const size_t NHDRS = sizeof HDRS / sizeof HDRS[0];
 
-static WifiConfig                  s_cfg;
-static volatile poller_phase_t     s_phase = POLLER_IDLE;
-static volatile bool               s_portal_req = false;
-static volatile bool               s_success = false;
-static volatile int                s_conn_fails = 0;
-static const char* volatile        s_error = "";
-static SemaphoreHandle_t           s_mutex;
-static char                        s_payload[320];
-static volatile bool               s_payload_ready = false;
+static WifiConfig               s_cfg;
+static volatile uint32_t        s_gen = 1;
+static volatile poller_phase_t  s_phase = POLLER_IDLE;
+static volatile poller_err_t    s_err = PERR_NONE;
+static volatile int             s_err_code = 0;
+static volatile bool            s_portal_req = false;
+static volatile bool            s_success = false;
+static volatile bool            s_last_ok = false;
+static SemaphoreHandle_t        s_mutex;
+static char                     s_payload[320];
+static volatile bool            s_payload_ready = false;
+
+static void set_phase(poller_phase_t ph) { if (s_phase != ph) { s_phase = ph; s_gen = s_gen + 1; } }
+static void set_err(poller_err_t e, int code = 0) {
+    if (s_err != e || s_err_code != code) { s_err = e; s_err_code = code; s_gen = s_gen + 1; }
+}
 
 // Route big mbedTLS buffers (TLS record buffers are 16 KB each) to PSRAM so
 // NimBLE and the TLS session can coexist in internal SRAM.
@@ -70,11 +81,11 @@ static void publish(const char* json) {
 static bool poll_once() {
     WiFiClientSecure tls;
     tls.setCACert(GTS_ROOT_R4_CA);
-    tls.setTimeout(15);
+    tls.setHandshakeTimeout(15);            // seconds; default 120 s would park the task
     HTTPClient http;
     http.setTimeout(15000);
     http.setReuse(false);
-    if (!http.begin(tls, API_URL)) { s_error = "TLS error"; return false; }
+    if (!http.begin(tls, API_URL)) { set_err(PERR_TLS); return false; }
     http.addHeader("Authorization", String("Bearer ") + s_cfg.token);
     http.addHeader("anthropic-version", "2023-06-01");
     http.addHeader("anthropic-beta", "oauth-2025-04-20");
@@ -83,94 +94,120 @@ static bool poll_once() {
     http.collectHeaders(HDRS, NHDRS);
 
     int code = http.POST((uint8_t*)API_BODY, strlen(API_BODY));
-    if (code <= 0) { s_error = "No network"; http.end(); return false; }
+    if (code <= 0) { http.end(); set_err(code == HTTPC_ERROR_CONNECTION_REFUSED || code == HTTPC_ERROR_CONNECTION_LOST ? PERR_NO_NETWORK : PERR_TLS, code); return false; }
 
     String v[NHDRS];
-    for (size_t i = 0; i < NHDRS; i++) v[i] = http.header(HDRS[i]);
+    for (size_t i = 0; i < NHDRS; i++) v[i] = http.header(HDRS[i]);   // must read before end()
     http.end();
 
     // Rate-limit headers arrive on 200 *and* on 429 (limit exceeded); use both.
-    if (code == 401) { s_error = "Bad token (401)"; return false; }
-    if (code != 200 && code != 429) {
-        static char e[24];
-        snprintf(e, sizeof e, "API error %d", code);
-        s_error = e;
-        return false;
-    }
+    if (code == 401) { set_err(PERR_BAD_TOKEN, code); return false; }
+    if (code != 200 && code != 429) { set_err(PERR_API, code); return false; }
 
     RateLimitHeaders h = { v[0].c_str(), v[1].c_str(), v[2].c_str(), v[3].c_str(),
                            v[4].c_str(), v[5].c_str(), v[6].c_str(), v[7].c_str() };
     PayloadOptions o = { (long)time(nullptr), s_cfg.tz_minutes, s_cfg.hour_fmt };
     char out[320];
-    if (!usage_payload_build(h, o, out, sizeof out)) { s_error = "No usage headers"; return false; }
+    if (!usage_payload_build(h, o, out, sizeof out)) { set_err(PERR_NO_HEADERS, code); return false; }
     publish(out);
-    s_error = (code == 429) ? "Rate limited (429)" : "";
-    Serial.printf("wifi: poll ok (%d) heap=%u psram=%u\n", code,
+    set_err(code == 429 ? PERR_RATE_LIMITED : PERR_NONE, code);
+    Serial.printf("wifi: poll ok (%d) heap=%u psram=%u stack_free=%u\n", code,
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-        (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+        (unsigned)uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t));
     return true;
 }
 
-// Never returns: POST /save in the portal restarts the device.
-static void enter_portal() {
-    s_phase = POLLER_PORTAL;
+// Run the hotspot until the form is saved (device restarts), the user presses
+// the PWR gesture again, or it sits unattended for PORTAL_IDLE_EXIT_MS while
+// WiFi credentials exist. The timeout matters after a power cut: the board
+// boots before the router does, and must not stay an open AP forever.
+static void run_portal() {
+    set_phase(POLLER_PORTAL);
     if (WiFi.getMode() & WIFI_MODE_STA) WiFi.disconnect(false);
     portal_start(s_cfg);
-    for (;;) { portal_tick(); vTaskDelay(pdMS_TO_TICKS(5)); }
+    vTaskDelay(pdMS_TO_TICKS(1500));   // let setup()'s own prints finish — USB-CDC writes from two cores collide
+    Serial.printf("portal: hotspot \"Clawdmeter\" up at %s\n", WiFi.softAPIP().toString().c_str());
+    s_portal_req = false;
+    uint32_t idle_since = millis();
+    for (;;) {
+        portal_tick();
+        vTaskDelay(pdMS_TO_TICKS(5));
+        if (WiFi.softAPgetStationNum() > 0) idle_since = millis();   // someone is on it; stay
+        bool gesture = s_portal_req;
+        bool timed_out = prov_has_wifi(s_cfg) && (millis() - idle_since > PORTAL_IDLE_EXIT_MS);
+        if (gesture || timed_out) {
+            Serial.printf("portal: closing (%s)\n", gesture ? "gesture" : "unattended");
+            s_portal_req = false;
+            portal_stop();
+            WiFi.mode(WIFI_STA);
+            return;
+        }
+    }
 }
 
 static void task(void*) {
-    if (!prov_has_wifi(s_cfg)) enter_portal();
+    if (!prov_has_wifi(s_cfg)) run_portal();   // first boot: nothing to connect to
 
     WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
     WiFi.setHostname("clawdmeter");
-    uint32_t interval = POLL_MS_MIN;
+    uint32_t poll_interval = POLL_MS_MIN;
+    uint32_t reconnect_wait = RECONNECT_MS_MIN;
+    int conn_fails = 0;
 
     for (;;) {
-        if (s_portal_req) enter_portal();
+        if (s_portal_req) { run_portal(); conn_fails = 0; reconnect_wait = RECONNECT_MS_MIN; }
 
         if (WiFi.status() != WL_CONNECTED) {
-            s_phase = POLLER_CONNECTING;
+            set_phase(POLLER_CONNECTING);
             WiFi.begin(s_cfg.ssid, s_cfg.pass);
             uint32_t t0 = millis();
-            while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000 && !s_portal_req)
+            while (WiFi.status() != WL_CONNECTED && millis() - t0 < CONNECT_TIMEOUT_MS && !s_portal_req)
                 vTaskDelay(pdMS_TO_TICKS(100));
             if (WiFi.status() != WL_CONNECTED) {
-                s_error = "No network";
-                // Wrong password / vanished network on a never-connected device →
-                // reopen the portal. After a successful connect, just keep retrying.
-                s_conn_fails = s_conn_fails + 1;
-                if (s_conn_fails >= CONNECT_FAILS_TO_PORTAL && !s_success) enter_portal();
-                vTaskDelay(pdMS_TO_TICKS(5000));
+                set_err(PERR_NO_NETWORK);
+                conn_fails++;
+                Serial.printf("wifi: connect failed (status %d, attempt %d)\n", (int)WiFi.status(), conn_fails);
+                // Only credentials that have NEVER worked send us back to the
+                // portal (wrong password / typo). Known-good credentials just
+                // keep retrying — the router is probably rebooting.
+                if (!s_cfg.ever_ok && conn_fails >= CONNECT_FAILS_TO_PORTAL) { run_portal(); conn_fails = 0; continue; }
+                vTaskDelay(pdMS_TO_TICKS(reconnect_wait));
+                reconnect_wait = reconnect_wait * 2 > RECONNECT_MS_MAX ? RECONNECT_MS_MAX : reconnect_wait * 2;
                 continue;
             }
-            s_conn_fails = 0;
+            conn_fails = 0;
+            reconnect_wait = RECONNECT_MS_MIN;
             Serial.printf("wifi: connected to %s ip=%s\n", s_cfg.ssid, WiFi.localIP().toString().c_str());
+            if (!s_cfg.ever_ok) { s_cfg.ever_ok = true; prov_save(s_cfg); }
             configTime(0, 0, "pool.ntp.org", "time.google.com");
         }
 
         if (time(nullptr) < SANE_EPOCH) {
-            s_phase = POLLER_WAIT_TIME;
-            s_error = "Waiting for time";
+            set_phase(POLLER_WAIT_TIME);
+            set_err(PERR_WAIT_TIME);
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
 
-        s_phase = POLLER_POLLING;
+        set_phase(POLLER_POLLING);
         if (!prov_has_token(s_cfg)) {
-            s_error = "No token - hold PWR to set up";
+            set_err(PERR_NO_TOKEN);
             vTaskDelay(pdMS_TO_TICKS(5000));
             continue;
         }
 
-        if (poll_once()) { s_success = true; interval = POLL_MS_MIN; }
+        bool ok = poll_once();
+        s_last_ok = ok;
+        if (ok) { s_success = true; poll_interval = POLL_MS_MIN; }
         else {
-            interval = interval * 2 > POLL_MS_MAX ? POLL_MS_MAX : interval * 2;
-            Serial.printf("wifi: poll failed (%s), next in %lus\n", s_error, (unsigned long)(interval / 1000));
+            poll_interval = poll_interval * 2 > POLL_MS_MAX ? POLL_MS_MAX : poll_interval * 2;
+            Serial.printf("wifi: poll failed (err %d code %d), next in %lus\n", (int)s_err, (int)s_err_code,
+                          (unsigned long)(poll_interval / 1000));
         }
+        s_gen = s_gen + 1;
 
-        for (uint32_t waited = 0; waited < interval && !s_portal_req; waited += 250)
+        for (uint32_t waited = 0; waited < poll_interval && !s_portal_req; waited += 250)
             vTaskDelay(pdMS_TO_TICKS(250));
     }
 }
@@ -183,16 +220,18 @@ void poller_start(const WifiConfig& cfg) {
     // operations with the cache disabled, which a PSRAM-resident stack cannot
     // survive (the task silently stalled on hardware with a PSRAM stack). The
     // big TLS buffers still land in PSRAM via tls_calloc above.
-    BaseType_t ok = xTaskCreatePinnedToCore(task, "wifi_poll", 8192, nullptr, 1, nullptr, 0);
-    if (ok != pdPASS) { s_error = "Task start failed"; Serial.println("wifi: poller task create failed"); }
+    BaseType_t ok = xTaskCreatePinnedToCore(task, "wifi_poll", TASK_STACK_BYTES, nullptr, 1, nullptr, 0);
+    if (ok != pdPASS) { set_err(PERR_TASK); Serial.println("wifi: poller task create failed"); }
 }
 
-void poller_request_portal(void)    { s_portal_req = true; }
-poller_phase_t poller_phase(void)   { return s_phase; }
-bool  poller_had_success(void)      { return s_success; }
-const char* poller_error(void)      { return s_error; }
-int   poller_connect_failures(void) { return s_conn_fails; }
-bool  poller_has_payload(void)      { return s_payload_ready; }
+void poller_request_portal(void)      { s_portal_req = true; }
+uint32_t       poller_gen(void)       { return s_gen; }
+poller_phase_t poller_phase(void)     { return s_phase; }
+poller_err_t   poller_error(void)     { return s_err; }
+int            poller_error_code(void){ return s_err_code; }
+bool  poller_had_success(void)        { return s_success; }
+bool  poller_last_poll_ok(void)       { return s_last_ok; }
+bool  poller_has_payload(void)        { return s_payload_ready; }
 
 bool poller_take_payload(char* dst, size_t cap) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
