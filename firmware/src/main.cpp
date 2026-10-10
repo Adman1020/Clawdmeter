@@ -7,6 +7,7 @@
 #include "data.h"
 #include "ui.h"
 #include "ble.h"
+#include "link/link.h"
 #include "splash.h"
 #include "usage_rate.h"
 #include "idle.h"
@@ -174,6 +175,9 @@ static void check_serial_cmd() {
             cmd_buf[cmd_pos] = '\0';
             if (strcmp(cmd_buf, "screenshot") == 0) send_screenshot();
             else if (strcmp(cmd_buf, "buzz") == 0)  sound_hal_play_reset();
+            else if (strcmp(cmd_buf, "ble-reset") == 0) ble_clear_bonds();
+            else if (!link_serial_cmd(cmd_buf) && cmd_buf[0])
+                Serial.printf("unknown command: %s\n", cmd_buf);
             cmd_pos = 0;
         } else if (cmd_pos < CMD_BUF_SIZE - 1) {
             cmd_buf[cmd_pos++] = c;
@@ -226,18 +230,20 @@ void setup() {
     lv_indev_set_read_cb(indev, my_touch_cb);
 
     ble_init();
+    link_init();
     input_hal_init();
 
     ui_init();
-    ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
+    ui_update_link_status(link_status());
     ui_update_battery(power_hal_battery_pct(), power_hal_is_charging());
     ui_show_screen(SCREEN_SPLASH);
 
-    Serial.printf("Dashboard ready (%s, %dx%d), waiting for data on BLE...\n",
+    Serial.printf("Dashboard ready (%s, %dx%d), waiting for usage data...\n",
         board_caps().name, W, H);
 }
 
-static ble_state_t last_ble_state = BLE_STATE_INIT;
+static link_state_t last_link_state   = LINK_INIT;
+static uint32_t     last_link_poll_ms = 0;
 
 // Hold-to-pair gesture: hold the PWR button ~3s, then RELEASE → clear all BLE
 // bonds and re-advertise. Clearing on *release* (not while held) is deliberate:
@@ -266,8 +272,8 @@ static void pair_tick(void) {
 
     if (power_hal_pwr_released()) {
         if (pair_state == PAIR_ARMED) {
-            Serial.println("Pair: released in window — clearing bonds, advertising");
-            ble_clear_bonds();
+            Serial.println("Pair: released in window — pair gesture");
+            link_on_pair_gesture();
         } else {
             Serial.println("Pair: released too early — cancelled");
         }
@@ -290,6 +296,7 @@ void loop() {
     lv_timer_handler();
     ui_tick_anim();
     ble_tick();
+    link_tick();
     power_hal_tick();
     imu_hal_tick();
     sound_hal_tick();
@@ -352,10 +359,17 @@ void loop() {
         pair_tick();
     }
 
-    ble_state_t bs = ble_get_state();
-    if (bs != last_ble_state) {
-        last_ble_state = bs;
-        ui_update_ble_status(bs, ble_get_device_name(), ble_get_mac_address());
+    // Transport status → UI. Throttled; the detail string can change without
+    // the state changing (WiFi errors), so compare the (static) pointer too.
+    if (millis() - last_link_poll_ms >= 250) {
+        last_link_poll_ms = millis();
+        LinkStatus ls = link_status();
+        static const char* last_detail = nullptr;
+        if (ls.state != last_link_state || ls.detail != last_detail) {
+            last_link_state = ls.state;
+            last_detail = ls.detail;
+            ui_update_link_status(ls);
+        }
     }
 
     static int  last_pct      = -2;
@@ -371,8 +385,8 @@ void loop() {
 
     check_serial_cmd();
 
-    if (ble_has_data()) {
-        if (parse_json(ble_get_data(), &usage)) {
+    if (link_has_data()) {
+        if (parse_json(link_get_data(), &usage)) {
             int g_before = usage_rate_group();
             bool session_reset = usage_rate_sample(usage.session_pct);
             int g_after = usage_rate_group();
@@ -389,9 +403,9 @@ void loop() {
                 if (splash_is_active()) splash_pick_for_current_rate();
             }
             ui_update(&usage);
-            ble_send_ack();
+            link_ack();
         } else {
-            ble_send_nack();
+            link_nack();
         }
     }
 

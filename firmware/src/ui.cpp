@@ -236,7 +236,12 @@ static const uint32_t DATA_FRESH_MS = 90000;  // usage counts as "live" within t
 // ---- Shared ----
 static lv_image_dsc_t logo_dsc;
 static screen_t current_screen = SCREEN_USAGE;
-static bool     s_ble_connected = false;   // cached BLE connection state
+static bool       s_link_connected = false;   // cached transport state
+static LinkStatus s_link = { LINK_INIT, "", "", "", "" };
+static lv_obj_t*  pair_l1 = nullptr;
+static lv_obj_t*  pair_l2 = nullptr;
+static lv_obj_t*  pair_l3 = nullptr;
+static lv_obj_t*  pair_detail = nullptr;
 static uint32_t connected_at_ms = 0;       // when we last entered CONNECTED ("Connected" dwell)
 
 // Animation state
@@ -426,25 +431,35 @@ static void build_pair_group(lv_obj_t* parent) {
     lv_obj_clear_flag(pair_group, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(pair_group, LV_OBJ_FLAG_EVENT_BUBBLE);
 
-    lv_obj_t* l1 = lv_label_create(pair_group);
-    lv_label_set_text(l1, "To pair");
-    lv_obj_set_style_text_font(l1, L.bt_status_font, 0);
-    lv_obj_set_style_text_color(l1, COL_TEXT, 0);
-    lv_obj_align(l1, LV_ALIGN_TOP_MID, 0, L.pair_y1);
+    // Text comes from the active transport (link_status()); the BLE wording is
+    // the fallback so the group never renders blank before the first update.
+    pair_l1 = lv_label_create(pair_group);
+    lv_label_set_text(pair_l1, *s_link.line1 ? s_link.line1 : "To pair");
+    lv_obj_set_style_text_font(pair_l1, L.bt_status_font, 0);
+    lv_obj_set_style_text_color(pair_l1, COL_TEXT, 0);
+    lv_obj_align(pair_l1, LV_ALIGN_TOP_MID, 0, L.pair_y1);
 
-    lv_obj_t* l2 = lv_label_create(pair_group);
-    lv_label_set_text(l2, "hold the power button");
-    lv_obj_set_style_text_font(l2, L.bt_device_font, 0);
-    lv_obj_set_style_text_color(l2, COL_DIM, 0);
-    lv_obj_align(l2, LV_ALIGN_TOP_MID, 0, L.pair_y2);
+    pair_l2 = lv_label_create(pair_group);
+    lv_label_set_text(pair_l2, *s_link.line2 ? s_link.line2 : "hold the power button");
+    lv_obj_set_style_text_font(pair_l2, L.bt_device_font, 0);
+    lv_obj_set_style_text_color(pair_l2, COL_DIM, 0);
+    lv_obj_align(pair_l2, LV_ALIGN_TOP_MID, 0, L.pair_y2);
 
-    lv_obj_t* l3 = lv_label_create(pair_group);
-    lv_label_set_text(l3, "for 3 seconds, then release");
-    lv_obj_set_style_text_font(l3, L.bt_device_font, 0);
-    lv_obj_set_style_text_color(l3, COL_DIM, 0);
-    lv_obj_align(l3, LV_ALIGN_TOP_MID, 0, L.pair_y3);
+    pair_l3 = lv_label_create(pair_group);
+    lv_label_set_text(pair_l3, *s_link.line3 ? s_link.line3 : "for 3 seconds, then release");
+    lv_obj_set_style_text_font(pair_l3, L.bt_device_font, 0);
+    lv_obj_set_style_text_color(pair_l3, COL_DIM, 0);
+    lv_obj_align(pair_l3, LV_ALIGN_TOP_MID, 0, L.pair_y3);
 
-    lv_obj_add_flag(pair_group, LV_OBJ_FLAG_HIDDEN);  // ui_update_ble_status decides
+    // Optional detail (WiFi SSID / last error). Sits under line 3; hidden when "".
+    pair_detail = lv_label_create(pair_group);
+    lv_label_set_text(pair_detail, "");
+    lv_obj_set_style_text_font(pair_detail, L.bt_device_font, 0);
+    lv_obj_set_style_text_color(pair_detail, COL_AMBER, 0);
+    lv_obj_align(pair_detail, LV_ALIGN_TOP_MID, 0, L.pair_y3 + (L.scr_h >= 460 ? 40 : 24));
+    lv_obj_add_flag(pair_detail, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_add_flag(pair_group, LV_OBJ_FLAG_HIDDEN);  // ui_update_link_status decides
 }
 
 // Idle "Zzz" screen — shown when the host is connected but no usage update has
@@ -682,7 +697,7 @@ void ui_update(const UsageData* data) {
 static void update_view_state(void) {
     if (!usage_group || !pair_group || !idle_group) return;
     int v;
-    if (!s_ble_connected) {
+    if (!s_link_connected) {
         v = 0;  // pairing hint
     } else if (data_received && data_ok && (lv_tick_get() - last_data_ms) < DATA_FRESH_MS) {
         v = 2;  // live usage
@@ -739,7 +754,7 @@ void ui_tick_anim(void) {
 
     // Status text by priority. Whimsical messages only when connected & settled.
     const char* text;
-    if (!s_ble_connected) {
+    if (!s_link_connected) {
         text = "Waiting";              // advertising / waiting for a host connection
     } else if (view_state == 1) {      // idle — alternate so it reads as alive AND data-less
         text = (anim_msg_idx & 1) ? "No data" : "Listening";
@@ -799,14 +814,21 @@ screen_t ui_get_current_screen(void) {
     return current_screen;
 }
 
-void ui_update_ble_status(ble_state_t state, const char* name, const char* mac) {
-    (void)name; (void)mac;
-    bool was_connected = s_ble_connected;
-    s_ble_connected = (state == BLE_STATE_CONNECTED);
+void ui_update_link_status(const LinkStatus& st) {
+    s_link = st;
+    bool was_connected = s_link_connected;
+    s_link_connected = (st.state == LINK_CONNECTED);
+    if (s_link_connected && !was_connected) connected_at_ms = lv_tick_get();
 
-    if (s_ble_connected && !was_connected) connected_at_ms = lv_tick_get();
-    // pair / idle / usage — picked from connection + data freshness.
-    update_view_state();
+    if (pair_l1) lv_label_set_text(pair_l1, st.line1);
+    if (pair_l2) lv_label_set_text(pair_l2, st.line2);
+    if (pair_l3) lv_label_set_text(pair_l3, st.line3);
+    if (pair_detail) {
+        lv_label_set_text(pair_detail, st.detail);
+        if (*st.detail) lv_obj_clear_flag(pair_detail, LV_OBJ_FLAG_HIDDEN);
+        else            lv_obj_add_flag(pair_detail, LV_OBJ_FLAG_HIDDEN);
+    }
+    update_view_state();   // pair / idle / usage — from connection + data freshness
 }
 
 void ui_update_battery(int percent, bool charging) {
