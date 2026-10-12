@@ -1,7 +1,10 @@
 // WiFi transport: the device polls the Anthropic API itself. Implements
 // link.h over wifi_poller / provisioning / captive_portal. All user-facing
 // text is formatted here, on the loop task, into this file's static buffers.
+#include <WiFi.h>
+#include "captive_portal.h"
 #include "link/link.h"
+#include <esp_heap_caps.h>
 #include "link/wifi/wifi_poller.h"
 #include "link/wifi/provisioning.h"
 #include <Arduino.h>
@@ -93,6 +96,7 @@ bool link_serial_cmd(const char* line) {
         LinkStatus st = link_status();
         Serial.printf("link: phase=%s state=%d ok_once=%d detail=\"%s\"\n",
                       PH[poller_phase()], (int)st.state, poller_had_success() ? 1 : 0, st.detail);
+        if (portal_active()) Serial.printf("link: portal stations=%d ip=%s\n", WiFi.softAPgetStationNum(), WiFi.softAPIP().toString().c_str());
     }
     return handled;
 }

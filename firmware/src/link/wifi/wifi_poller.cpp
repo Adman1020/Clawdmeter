@@ -202,8 +202,11 @@ static void task(void*) {
         if (ok) { s_success = true; poll_interval = POLL_MS_MIN; }
         else {
             poll_interval = poll_interval * 2 > POLL_MS_MAX ? POLL_MS_MAX : poll_interval * 2;
-            Serial.printf("wifi: poll failed (err %d code %d), next in %lus\n", (int)s_err, (int)s_err_code,
-                          (unsigned long)(poll_interval / 1000));
+            Serial.printf("wifi: poll failed (err %d code %d), next in %lus heap=%u largest=%u min=%u\n",
+                          (int)s_err, (int)s_err_code, (unsigned long)(poll_interval / 1000),
+                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                          (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
         }
         s_gen = s_gen + 1;
 

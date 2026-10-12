@@ -62,7 +62,9 @@ static void html_escape(const char* in, String& out) {
     }
 }
 
+static void log_req();
 static void handle_root() {
+    log_req();
     String page; page.reserve(4096);
     page += FPSTR(PAGE_HEAD);
     page += "<label>WiFi network</label><input name=\"ssid\" required maxlength=\"32\" value=\"";
@@ -75,7 +77,11 @@ static void handle_root() {
     page += "\">";
     append_selects(page, s_cfg.tz_minutes, s_cfg.hour_fmt);
     page += FPSTR(PAGE_TAIL);
+    uint32_t t0 = millis();
     s_http->send(200, "text/html", page);
+    Serial.printf("portal: root sent %u bytes in %lu ms, client %s, heap=%u\n",
+        (unsigned)page.length(), (unsigned long)(millis() - t0),
+        s_http->client().connected() ? "open" : "closed", (unsigned)ESP.getFreeHeap());
 }
 
 static void copy_field(char* dst, size_t cap, const String& v) {
@@ -84,6 +90,7 @@ static void copy_field(char* dst, size_t cap, const String& v) {
 }
 
 static void handle_save() {
+    log_req();
     // WebServer::arg() URL-decodes form bodies, so &, +, % and quotes in a
     // password arrive verbatim.
     String ssid = s_http->arg("ssid"); ssid.trim();
@@ -106,7 +113,23 @@ static void handle_save() {
     ESP.restart();
 }
 
+static void log_req() {
+    Serial.printf("portal: %s %s from %s\n",
+        s_http->method() == HTTP_POST ? "POST" : "GET",
+        s_http->uri().c_str(), s_http->client().remoteIP().toString().c_str());
+}
+
+static void on_ap_event(WiFiEvent_t ev, WiFiEventInfo_t info) {
+    if (ev == ARDUINO_EVENT_WIFI_AP_STACONNECTED)
+        Serial.println("portal: station joined");
+    else if (ev == ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED)
+        Serial.printf("portal: station got IP %s\n", IPAddress(info.wifi_ap_staipassigned.ip.addr).toString().c_str());
+    else if (ev == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED)
+        Serial.println("portal: station left");
+}
+
 static void handle_redirect() {
+    log_req();
     s_http->sendHeader("Location", "http://192.168.4.1/", true);
     s_http->send(302, "text/plain", "");
 }
@@ -114,6 +137,8 @@ static void handle_redirect() {
 void portal_start(const WifiConfig& current) {
     if (s_active) return;
     s_cfg = current;
+    static bool ev_hooked = false;
+    if (!ev_hooked) { WiFi.onEvent(on_ap_event); ev_hooked = true; }
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAPConfig(s_ip, s_ip, IPAddress(255, 255, 255, 0));
     WiFi.softAP("Clawdmeter");
