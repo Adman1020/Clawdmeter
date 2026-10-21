@@ -1,5 +1,20 @@
 # Clawdmeter
 
+> ## About this fork
+>
+> Fork of [markmcgookin/Clawdmeter](https://github.com/markmcgookin/Clawdmeter) (branch `feature/wifi-link`,
+> [PR #202](https://github.com/HermannBjorgvin/Clawdmeter/pull/202): standalone WiFi mode), which is itself
+> based on [HermannBjorgvin/Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter). All the real work is theirs.
+>
+> **What this fork adds** (branch `local/london-tz`):
+> - **UK daylight saving:** the "UTC+0" timezone option in the WiFi setup portal is now "UK/Ireland (GMT/BST, auto DST)".
+>   It uses the POSIX rule `GMT0BST,M3.5.0/1,M10.5.0`, so reset times stay right when the clocks change.
+>   Other timezone options are still fixed offsets. True UTC is no longer selectable.
+> - Tested on a Waveshare ESP32-S3-Touch-AMOLED-2.16 (`waveshare_amoled_216_wifi` env).
+>
+> Not changed: everything else, including the open Copilot review findings on PR #202. If that PR changes, this fork needs rebasing.
+> See the [licensing warning](#licensing-gray-area-warning) below: the fonts and Clawd mascot are not mine to license.
+
 > Also check out [Beam](https://github.com/notaharness/beam)! A CLI that lets you pair your machines using a passkey and [@Tailscale's tailcat](https://tailscale.com/blog/tailcat).
 
 <img src="assets/readme/waving.gif" width="120" align="right" alt="">
