@@ -19,7 +19,6 @@ Branches: `feature/wifi-link` mirrors the PR branch; `local/london-tz` (default)
 ## Not done
 - The six Copilot review findings on PR #202 (see `wifi-handoff.md`).
 - Encrypting the stored token behind a PIN.
-- A multi-provider pager was considered and dropped (no good official data sources besides GitHub Copilot's personal billing API).
 
 ## Privacy
 Commits use the GitHub noreply address. Keep it that way: `git config user.email` is set in this clone.
