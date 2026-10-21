@@ -28,7 +28,7 @@ struct TzOpt { int mins; const char* label; };
 static const TzOpt TZ_OPTS[] = {
     {-720,"UTC-12"},{-600,"UTC-10 Hawaii"},{-540,"UTC-9 Alaska"},{-480,"UTC-8 Pacific"},
     {-420,"UTC-7 Mountain"},{-360,"UTC-6 Central"},{-300,"UTC-5 Eastern"},{-240,"UTC-4 Atlantic"},
-    {-180,"UTC-3"},{-120,"UTC-2"},{-60,"UTC-1"},{0,"UTC+0 London/Dublin"},{60,"UTC+1 Central Europe"},
+    {-180,"UTC-3"},{-120,"UTC-2"},{-60,"UTC-1"},{0,"UK/Ireland (GMT/BST, auto DST)"},{60,"UTC+1 Central Europe"},
     {120,"UTC+2"},{180,"UTC+3"},{240,"UTC+4"},{300,"UTC+5"},{330,"UTC+5:30 India"},{345,"UTC+5:45 Nepal"},
     {360,"UTC+6"},{420,"UTC+7"},{480,"UTC+8 China/Singapore"},{540,"UTC+9 Japan"},{570,"UTC+9:30 Adelaide"},
     {600,"UTC+10 Sydney"},{660,"UTC+11"},{720,"UTC+12 NZ"},{780,"UTC+13"},

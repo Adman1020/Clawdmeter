@@ -78,6 +78,17 @@ static void publish(const char* json) {
 }
 
 // One API round-trip. Returns true when a usable payload was published.
+
+// The "UTC+0" provisioning choice means UK/Ireland: apply GMT/BST so reset
+// times follow daylight saving. Other choices stay fixed offsets.
+static const char* UK_POSIX_TZ = "GMT0BST,M3.5.0/1,M10.5.0";
+static int effective_tz_minutes(long now_utc) {
+    if (s_cfg.tz_minutes != 0) return s_cfg.tz_minutes;
+    time_t t = (time_t)now_utc;
+    struct tm lt; localtime_r(&t, &lt);
+    return lt.tm_isdst > 0 ? 60 : 0;
+}
+
 static bool poll_once() {
     WiFiClientSecure tls;
     tls.setCACert(GTS_ROOT_R4_CA);
@@ -106,7 +117,8 @@ static bool poll_once() {
 
     RateLimitHeaders h = { v[0].c_str(), v[1].c_str(), v[2].c_str(), v[3].c_str(),
                            v[4].c_str(), v[5].c_str(), v[6].c_str(), v[7].c_str() };
-    PayloadOptions o = { (long)time(nullptr), s_cfg.tz_minutes, s_cfg.hour_fmt };
+    long now = (long)time(nullptr);
+    PayloadOptions o = { now, effective_tz_minutes(now), s_cfg.hour_fmt };
     char out[320];
     if (!usage_payload_build(h, o, out, sizeof out)) { set_err(PERR_NO_HEADERS, code); return false; }
     publish(out);
@@ -181,6 +193,8 @@ static void task(void*) {
             Serial.printf("wifi: connected to %s ip=%s\n", s_cfg.ssid, WiFi.localIP().toString().c_str());
             if (!s_cfg.ever_ok) { s_cfg.ever_ok = true; prov_save(s_cfg); }
             configTime(0, 0, "pool.ntp.org", "time.google.com");
+            setenv("TZ", UK_POSIX_TZ, 1);   // for effective_tz_minutes(); SNTP itself stays UTC
+            tzset();
         }
 
         if (time(nullptr) < SANE_EPOCH) {
