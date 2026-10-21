@@ -18,3 +18,8 @@ daemon/.venv/
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# Fork-local
+.pio/
+dist/
+*:Zone.Identifier
