@@ -13,6 +13,7 @@ enum IdleState {
 
 static IdleState state = STATE_AWAKE;
 static uint32_t last_activity_ms = 0;
+static uint32_t sleep_started_ms = 0;
 static uint32_t fade_started_ms  = 0;
 static uint32_t fade_last_step_ms = 0;
 static uint8_t  fade_from = DISPLAY_DEFAULT_BRIGHTNESS;
@@ -105,6 +106,7 @@ void idle_tick(void) {
         if (elapsed >= dur) {
             apply_brightness(fade_to);
             state = (state == STATE_FADING_OUT) ? STATE_ASLEEP : STATE_AWAKE;
+            if (state == STATE_ASLEEP) sleep_started_ms = now;
         } else {
             // Linear interpolation fade_from -> fade_to over dur ms.
             int32_t span = (int32_t)fade_to - (int32_t)fade_from;
@@ -117,6 +119,12 @@ void idle_tick(void) {
     }
 
     case STATE_ASLEEP:
+        if (AUTOOFF_AFTER_SLEEP_MS && !power_hal_is_vbus_in() &&
+            now - sleep_started_ms >= AUTOOFF_AFTER_SLEEP_MS) {
+            Serial.println("idle: dark and on battery, powering off");
+            power_hal_power_off();
+            sleep_started_ms = now;  // boards without a PMU: retry later, don't spam
+        }
         break;
     }
 }

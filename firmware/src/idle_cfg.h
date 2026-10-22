@@ -21,3 +21,9 @@
 // fully ignored during sleep — useful if cats/sleeves brushing the panel
 // overnight would be a problem.
 #define IDLE_WAKE_ON_TOUCH          true
+
+// Auto power-off: when the screen has been dark for this long and the device
+// is on battery (no USB), cut power completely so a forgotten device doesn't
+// drain flat. Needs a PMU (AXP2101 boards); a no-op elsewhere. 0 disables.
+// Wake with the PWR button.
+#define AUTOOFF_AFTER_SLEEP_MS      (10UL * 60UL * 1000UL)  // 10 min

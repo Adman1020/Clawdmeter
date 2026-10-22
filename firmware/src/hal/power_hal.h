@@ -25,3 +25,7 @@ bool power_hal_pwr_long_pressed(void);
 // Edge-triggered: true once on the PWR release edge, then clears. Completes
 // or cancels the hold-to-pair gesture.
 bool power_hal_pwr_released(void);
+
+// Cut power completely (PMU shutdown). Does not return on boards with a PMU;
+// a no-op elsewhere. Waking needs the PWR button (or USB being plugged in).
+void power_hal_power_off(void);

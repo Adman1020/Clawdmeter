@@ -24,3 +24,6 @@ bool power_hal_pwr_pressed(void) { return false; }
 // or the 1.8" (software hold-timing off a polled GPIO) port. Stub = no gesture.
 bool power_hal_pwr_long_pressed(void) { return false; }
 bool power_hal_pwr_released(void) { return false; }
+
+// No PMU to cut power with: auto-off is a no-op on this board.
+void power_hal_power_off(void) {}

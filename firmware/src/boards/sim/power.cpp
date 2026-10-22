@@ -11,3 +11,6 @@ bool power_hal_is_vbus_in(void)  { return sim_charging(); }
 bool power_hal_pwr_pressed(void)      { return sim_take_pwr_pressed(); }
 bool power_hal_pwr_long_pressed(void) { return sim_take_pwr_long(); }
 bool power_hal_pwr_released(void)     { return sim_take_pwr_released(); }
+
+// No PMU to cut power with: auto-off is a no-op on this board.
+void power_hal_power_off(void) {}
